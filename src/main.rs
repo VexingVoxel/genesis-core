@@ -1,63 +1,171 @@
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use serde::{Serialize};
 use chrono::Utc;
 
-#[derive(Copy, Clone, Serialize)]
-struct Voxel(u32);
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
+use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
+use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
+use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
+use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags};
+use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::pipeline::compute::ComputePipelineCreateInfo;
+use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
+use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout};
+use vulkano::VulkanLibrary;
+
+// --- Voxel Schema ---
+#[derive(Copy, Clone, Serialize, Debug, Default, vulkano::buffer::BufferContents)]
+#[repr(C)]
+struct Voxel {
+    packed: u32,
+}
 
 impl Voxel {
     fn new(id: u8, state: u8, thermal: u8, light: u8) -> Self {
-        let packed = (id as u32) | 
-                     ((state as u32) << 8) | 
-                     ((thermal as u32) << 16) | 
-                     ((light as u32) << 24);
-        Voxel(packed)
+        Voxel {
+            packed: (id as u32) | ((state as u32) << 8) | ((thermal as u32) << 16) | ((light as u32) << 24)
+        }
     }
 }
 
-#[derive(Serialize)]
-struct Heartbeat {
-    tick: u64,
-    node_name: String,
-    status: String,
-    voxel_count: usize,
-    timestamp: i64,
+mod cs {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "src/growth.glsl",
+    }
 }
 
 fn main() {
-    let context = zmq::Context::new();
-    let publisher = context.socket(zmq::PUB).unwrap();
-    publisher.bind("tcp://*:5555").expect("Could not bind publisher");
-    
-    println!("--- Genesis Core Phase 2 Starting ---");
-    
+    println!("--- Genesis Core: GPU Engine Starting ---");
+
+    // 1. Initialize Vulkan
+    let library = VulkanLibrary::new().expect("no local Vulkan library/driver found");
+    let instance = Instance::new(library, InstanceCreateInfo {
+        flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
+        ..Default::default()
+    }).expect("failed to create instance");
+
+    // 2. Select Physical Device (RTX 5060 Ti)
+    let physical_device = instance
+        .enumerate_physical_devices()
+        .expect("could not enumerate devices")
+        .find(|p| p.properties().device_name.contains("5060"))
+        .expect("RTX 5060 Ti not found");
+
+    println!("Using GPU: {}", physical_device.properties().device_name);
+
+    // 3. Create Logical Device and Queue
+    let queue_family_index = physical_device
+        .queue_family_properties()
+        .iter()
+        .enumerate()
+        .position(|(_i, q)| q.queue_flags.contains(QueueFlags::COMPUTE))
+        .expect("couldn't find a compute queue family") as u32;
+
+    let (device, mut queues) = Device::new(physical_device, DeviceCreateInfo {
+        queue_create_infos: vec![QueueCreateInfo {
+            queue_family_index,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }).expect("failed to create device");
+
+    let queue = queues.next().unwrap();
+
+    // 4. Memory Management
+    let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
+    let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
+        device.clone(),
+        StandardCommandBufferAllocatorCreateInfo::default(),
+    ));
+    let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
+        device.clone(),
+        Default::default(),
+    ));
+
+    // 5. Initialize Voxel Grid (128x128x32)
     let width = 128;
     let height = 128;
     let depth = 32;
-    let grid = vec![Voxel::new(0, 0, 20, 255); width * height * depth];
-    let voxel_count = grid.len();
-    
-    println!("Voxel Grid Initialized: {} voxels", voxel_count);
+    let data_size = width * height * depth;
+    let mut grid_data = vec![Voxel::new(1, 0, 20, 255); data_size]; // All Dirt (ID 1)
 
+    let grid_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        grid_data.clone(),
+    ).expect("failed to create buffer");
+
+    // 6. Load and Compile Shader
+    let shader = cs::load(device.clone()).expect("failed to create shader module");
+    let pipeline = {
+        let layout = PipelineLayout::new(
+            device.clone(),
+            PipelineDescriptorSetLayoutCreateInfo::from_stages([&shader.compute_entry_point().unwrap()])
+                .into_pipeline_layout_create_info(device.clone())
+                .unwrap(),
+        ).unwrap();
+        ComputePipeline::new(
+            device.clone(),
+            None,
+            ComputePipelineCreateInfo::stage_layout(shader.compute_entry_point().unwrap(), layout),
+        ).expect("failed to create compute pipeline")
+    };
+
+    // 7. Descriptor Sets (Linking buffer to shader)
+    let layout = pipeline.layout().set_layouts().get(0).unwrap();
+    let set = PersistentDescriptorSet::new(
+        &descriptor_set_allocator,
+        layout.clone(),
+        [WriteDescriptorSet::buffer(0, grid_buffer.clone())],
+        [],
+    ).unwrap();
+
+    // 8. The Simulation Loop
+    println!("Simulation Loop Active...");
     let mut tick = 0;
     loop {
-        let heartbeat = Heartbeat {
-            tick,
-            node_name: "genesis-compute".to_string(),
-            status: "SIMULATING".to_string(),
-            voxel_count,
-            timestamp: Utc::now().timestamp(),
-        };
+        let mut builder = AutoCommandBufferBuilder::primary(
+            &command_buffer_allocator,
+            queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        ).unwrap();
 
-        let json = serde_json::to_string(&heartbeat).unwrap();
-        publisher.send(&json, 0).unwrap();
+        builder
+            .bind_compute_pipeline(pipeline.clone())
+            .unwrap()
+            .bind_descriptor_sets(PipelineBindPoint::Compute, pipeline.layout().clone(), 0, set.clone())
+            .unwrap()
+            .dispatch([ (data_size as u32 / 256) + 1, 1, 1])
+            .unwrap();
+
+        let command_buffer = builder.build().unwrap();
+        
+        // Execute on GPU
+        vulkano::sync::now(device.clone())
+            .then_execute(queue.clone(), command_buffer)
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
 
         if tick % 60 == 0 {
-            println!("Tick {}: Simulating {} voxels", tick, voxel_count);
+            println!("[Tick {}] GPU simulation step complete.", tick);
         }
 
         tick += 1;
-        thread::sleep(Duration::from_millis(16)); 
+        thread::sleep(Duration::from_millis(16));
     }
 }
