@@ -4,7 +4,7 @@ use std::time::Duration;
 use serde::{Serialize};
 use chrono::Utc;
 
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
@@ -40,6 +40,13 @@ struct Heartbeat {
     status: String,
     timestamp: i64,
     voxel_slice: Vec<u32>, // The 32x32 visualization slice
+}
+
+// NEW: Add a struct for our uniform data
+#[derive(Copy, Clone, vulkano::buffer::BufferContents)]
+#[repr(C)]
+struct TimeInfo {
+    u_time: u32,
 }
 
 mod cs {
@@ -120,6 +127,21 @@ fn main() {
         grid_data,
     ).expect("failed to create buffer");
 
+    // NEW: Create buffer for time uniform
+    let time_buffer = Buffer::from_data(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::UNIFORM_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        TimeInfo { u_time: 0 }
+    ).expect("failed to create time buffer");
+
+
     let shader = cs::load(device.clone()).expect("failed to create shader module");
     let entry_point = shader.entry_point("main").expect("main entry point not found");
     let stage = PipelineShaderStageCreateInfo::new(entry_point);
@@ -139,16 +161,23 @@ fn main() {
     };
 
     let layout = pipeline.layout().set_layouts().get(0).unwrap();
-    let set = PersistentDescriptorSet::new(
-        &descriptor_set_allocator,
-        layout.clone(),
-        [WriteDescriptorSet::buffer(0, grid_buffer.clone())],
-        [],
-    ).unwrap();
-
+    
     println!("Simulation Loop Active...");
-    let mut tick = 0;
+    let mut tick: u64 = 0;
     loop {
+        // NEW: Update the time buffer and create a new descriptor set for this frame
+        time_buffer.write().unwrap().u_time = tick as u32;
+
+        let set = PersistentDescriptorSet::new(
+            &descriptor_set_allocator,
+            layout.clone(),
+            [
+                WriteDescriptorSet::buffer(0, grid_buffer.clone()),
+                WriteDescriptorSet::buffer(1, time_buffer.clone()),
+            ],
+            [],
+        ).unwrap();
+
         let mut builder = AutoCommandBufferBuilder::primary(
             &command_buffer_allocator,
             queue.queue_family_index(),
@@ -173,13 +202,11 @@ fn main() {
             .wait(None)
             .unwrap();
 
-        // --- NEW: Read Voxel Slice for Visualization ---
+        // --- Read Voxel Slice for Visualization ---
         let mut voxel_slice = Vec::with_capacity(1024); // 32x32
         
-        // We only pull the data every 10 ticks to save network bandwidth
         if tick % 10 == 0 {
             let content = grid_buffer.read().unwrap();
-            // Grab a 32x32 square from the center of the top layer
             for y in 48..80 {
                 for x in 48..80 {
                     let idx = (31 * width * height) + (y * width) + x;
