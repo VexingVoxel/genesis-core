@@ -138,7 +138,7 @@ fn main() {
         ).unwrap();
 
         builder
-            .bind_compute_pipeline(PipelineBindPoint::Compute, pipeline.clone())
+            .bind_pipeline_compute(pipeline.clone())
             .unwrap()
             .bind_descriptor_sets(PipelineBindPoint::Compute, pipeline.layout().clone(), 0, set.clone())
             .unwrap()
