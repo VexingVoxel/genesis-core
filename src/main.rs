@@ -5,7 +5,7 @@ use serde::{Serialize};
 
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::{Device, DeviceCreateInfo, QueueCreateInfo, QueueFlags};
@@ -13,7 +13,7 @@ use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::pipeline::compute::ComputePipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
-use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout};
+use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::sync::GpuFuture;
 use vulkano::VulkanLibrary;
 
@@ -104,18 +104,19 @@ fn main() {
 
     let shader = cs::load(device.clone()).expect("failed to create shader module");
     let entry_point = shader.entry_point("main").expect("main entry point not found");
+    let stage = PipelineShaderStageCreateInfo::new(entry_point);
 
     let pipeline = {
         let layout = PipelineLayout::new(
             device.clone(),
-            PipelineDescriptorSetLayoutCreateInfo::from_stages([&entry_point])
+            PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
                 .into_pipeline_layout_create_info(device.clone())
                 .unwrap(),
         ).unwrap();
         ComputePipeline::new(
             device.clone(),
             None,
-            ComputePipelineCreateInfo::stage_layout(entry_point, layout),
+            ComputePipelineCreateInfo::stage_layout(stage, layout),
         ).expect("failed to create compute pipeline")
     };
 
@@ -137,7 +138,7 @@ fn main() {
         ).unwrap();
 
         builder
-            .bind_compute_pipeline(PipelineBindPoint::Compute, pipeline.clone())
+            .bind_compute_pipeline(pipeline.clone())
             .unwrap()
             .bind_descriptor_sets(PipelineBindPoint::Compute, pipeline.layout().clone(), 0, set.clone())
             .unwrap()
