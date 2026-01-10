@@ -39,6 +39,7 @@ struct Heartbeat {
     node_name: String,
     status: String,
     timestamp: i64,
+    voxel_slice: Vec<u32>, // The 32x32 visualization slice
 }
 
 mod cs {
@@ -49,13 +50,12 @@ mod cs {
 }
 
 fn main() {
-    println!("--- Genesis Core: GPU Engine Starting ---");
+    println!("--- Genesis Core: Phase 2 Engine Starting ---");
 
     // 0. Initialize ZMQ
     let zmq_context = zmq::Context::new();
     let publisher = zmq_context.socket(zmq::PUB).unwrap();
     publisher.bind("tcp://0.0.0.0:5555").expect("Could not bind ZMQ publisher");
-    println!("ZMQ Publisher bound to 0.0.0.0:5555");
 
     // 1. Initialize Vulkan
     let library = VulkanLibrary::new().expect("no local Vulkan library/driver found");
@@ -70,8 +70,7 @@ fn main() {
         .find(|p| p.properties().device_name.contains("5060"))
         .expect("RTX 5060 Ti not found");
 
-    println!("Using GPU: {}", physical_device.properties().device_name);
-
+    // 3. Create Logical Device
     let queue_family_index = physical_device
         .queue_family_properties()
         .iter()
@@ -99,16 +98,19 @@ fn main() {
         Default::default(),
     ));
 
+    // 5. Initialize Voxel Grid (128x128x32)
     let width = 128;
     let height = 128;
     let depth = 32;
     let data_size = width * height * depth;
+    
+    // Fill with Dirt (ID 1)
     let grid_data = vec![Voxel::new(1, 0, 20, 255); data_size]; 
 
     let grid_buffer = Buffer::from_iter(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::STORAGE_BUFFER,
+            usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC,
             ..Default::default()
         },
         AllocationCreateInfo {
@@ -171,18 +173,35 @@ fn main() {
             .wait(None)
             .unwrap();
 
+        // --- NEW: Read Voxel Slice for Visualization ---
+        let mut voxel_slice = Vec::with_capacity(1024); // 32x32
+        
+        // We only pull the data every 10 ticks to save network bandwidth
+        if tick % 10 == 0 {
+            let content = grid_buffer.read().unwrap();
+            // Grab a 32x32 square from the center of the top layer
+            for y in 48..80 {
+                for x in 48..80 {
+                    let idx = (31 * width * height) + (y * width) + x;
+                    voxel_slice.push(content[idx].packed);
+                }
+            }
+        }
+
         // Send Heartbeat
         let heartbeat = Heartbeat {
             tick,
             node_name: "genesis-compute".to_string(),
             status: "SIMULATING".to_string(),
             timestamp: Utc::now().timestamp(),
+            voxel_slice,
         };
+        
         let json = serde_json::to_string(&heartbeat).unwrap();
         publisher.send(&json, 0).unwrap();
 
         if tick % 60 == 0 {
-            println!("[Tick {}] GPU simulation step complete. Heartbeat sent.", tick);
+            println!("[Tick {}] Heartbeat + Voxel Data sent.", tick);
         }
 
         tick += 1;
