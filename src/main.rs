@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use serde::{Serialize};
+use chrono::Utc;
 
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
@@ -32,6 +33,14 @@ impl Voxel {
     }
 }
 
+#[derive(Serialize)]
+struct Heartbeat {
+    tick: u64,
+    node_name: String,
+    status: String,
+    timestamp: i64,
+}
+
 mod cs {
     vulkano_shaders::shader! {
         ty: "compute",
@@ -42,6 +51,13 @@ mod cs {
 fn main() {
     println!("--- Genesis Core: GPU Engine Starting ---");
 
+    // 0. Initialize ZMQ
+    let zmq_context = zmq::Context::new();
+    let publisher = zmq_context.socket(zmq::PUB).unwrap();
+    publisher.bind("tcp://0.0.0.0:5555").expect("Could not bind ZMQ publisher");
+    println!("ZMQ Publisher bound to 0.0.0.0:5555");
+
+    // 1. Initialize Vulkan
     let library = VulkanLibrary::new().expect("no local Vulkan library/driver found");
     let instance = Instance::new(library, InstanceCreateInfo {
         flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
@@ -155,8 +171,18 @@ fn main() {
             .wait(None)
             .unwrap();
 
+        // Send Heartbeat
+        let heartbeat = Heartbeat {
+            tick,
+            node_name: "genesis-compute".to_string(),
+            status: "SIMULATING".to_string(),
+            timestamp: Utc::now().timestamp(),
+        };
+        let json = serde_json::to_string(&heartbeat).unwrap();
+        publisher.send(&json, 0).unwrap();
+
         if tick % 60 == 0 {
-            println!("[Tick {}] GPU simulation step complete.", tick);
+            println!("[Tick {}] GPU simulation step complete. Heartbeat sent.", tick);
         }
 
         tick += 1;
