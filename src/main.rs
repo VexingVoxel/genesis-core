@@ -2,19 +2,19 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use serde::{Serialize};
-use chrono::Utc;
 
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
-use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags};
+use vulkano::device::{Device, DeviceCreateInfo, QueueCreateInfo, QueueFlags};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::pipeline::compute::ComputePipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout};
+use vulkano::sync::GpuFuture;
 use vulkano::VulkanLibrary;
 
 // --- Voxel Schema ---
@@ -42,14 +42,12 @@ mod cs {
 fn main() {
     println!("--- Genesis Core: GPU Engine Starting ---");
 
-    // 1. Initialize Vulkan
     let library = VulkanLibrary::new().expect("no local Vulkan library/driver found");
     let instance = Instance::new(library, InstanceCreateInfo {
         flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
         ..Default::default()
     }).expect("failed to create instance");
 
-    // 2. Select Physical Device (RTX 5060 Ti)
     let physical_device = instance
         .enumerate_physical_devices()
         .expect("could not enumerate devices")
@@ -58,7 +56,6 @@ fn main() {
 
     println!("Using GPU: {}", physical_device.properties().device_name);
 
-    // 3. Create Logical Device and Queue
     let queue_family_index = physical_device
         .queue_family_properties()
         .iter()
@@ -76,7 +73,6 @@ fn main() {
 
     let queue = queues.next().unwrap();
 
-    // 4. Memory Management
     let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
     let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
         device.clone(),
@@ -87,12 +83,11 @@ fn main() {
         Default::default(),
     ));
 
-    // 5. Initialize Voxel Grid (128x128x32)
     let width = 128;
     let height = 128;
     let depth = 32;
     let data_size = width * height * depth;
-    let mut grid_data = vec![Voxel::new(1, 0, 20, 255); data_size]; // All Dirt (ID 1)
+    let grid_data = vec![Voxel::new(1, 0, 20, 255); data_size]; 
 
     let grid_buffer = Buffer::from_iter(
         memory_allocator.clone(),
@@ -104,26 +99,26 @@ fn main() {
             memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
             ..Default::default()
         },
-        grid_data.clone(),
+        grid_data,
     ).expect("failed to create buffer");
 
-    // 6. Load and Compile Shader
     let shader = cs::load(device.clone()).expect("failed to create shader module");
+    let entry_point = shader.entry_point("main").expect("main entry point not found");
+
     let pipeline = {
         let layout = PipelineLayout::new(
             device.clone(),
-            PipelineDescriptorSetLayoutCreateInfo::from_stages([&shader.compute_entry_point().unwrap()])
+            PipelineDescriptorSetLayoutCreateInfo::from_stages([&entry_point])
                 .into_pipeline_layout_create_info(device.clone())
                 .unwrap(),
         ).unwrap();
         ComputePipeline::new(
             device.clone(),
             None,
-            ComputePipelineCreateInfo::stage_layout(shader.compute_entry_point().unwrap(), layout),
+            ComputePipelineCreateInfo::stage_layout(entry_point, layout),
         ).expect("failed to create compute pipeline")
     };
 
-    // 7. Descriptor Sets (Linking buffer to shader)
     let layout = pipeline.layout().set_layouts().get(0).unwrap();
     let set = PersistentDescriptorSet::new(
         &descriptor_set_allocator,
@@ -132,7 +127,6 @@ fn main() {
         [],
     ).unwrap();
 
-    // 8. The Simulation Loop
     println!("Simulation Loop Active...");
     let mut tick = 0;
     loop {
@@ -143,7 +137,7 @@ fn main() {
         ).unwrap();
 
         builder
-            .bind_compute_pipeline(pipeline.clone())
+            .bind_compute_pipeline(PipelineBindPoint::Compute, pipeline.clone())
             .unwrap()
             .bind_descriptor_sets(PipelineBindPoint::Compute, pipeline.layout().clone(), 0, set.clone())
             .unwrap()
@@ -152,7 +146,6 @@ fn main() {
 
         let command_buffer = builder.build().unwrap();
         
-        // Execute on GPU
         vulkano::sync::now(device.clone())
             .then_execute(queue.clone(), command_buffer)
             .unwrap()
