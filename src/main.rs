@@ -123,7 +123,11 @@ fn main() {
     let data_size = width * height * depth;
     
     // Fill with Dirt (ID 1)
-    let grid_data = vec![Voxel::new(1, 0, 20, 255); data_size]; 
+    let mut grid_data = vec![Voxel::new(1, 0, 20, 255); data_size]; 
+    
+    // Add Test Pattern: One Grass voxel at (64, 64) in the top layer
+    let test_idx = ((depth - 1) * width * height) + (64 * width) + 64;
+    grid_data[test_idx] = Voxel::new(2, 0, 20, 255);
 
     let grid_buffer = Buffer::from_iter(
         memory_allocator.clone(),
