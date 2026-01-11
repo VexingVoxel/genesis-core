@@ -145,26 +145,15 @@ fn main() {
     let height = 128;
     let depth = 32;
     let data_size = width * height * depth;
-    let agent_count = 5;
+    let agent_count = 100;
     
-    // Fill with Dirt (ID 1) + Debug Checkerboard for mapping validation
+    // Fill with Dirt (ID 1) with randomized initial state for organic growth
     let mut grid_data = Vec::with_capacity(data_size);
-    for z in 0..depth {
-        for y in 0..height {
-            for x in 0..width {
-                // ID 1 (Dirt), but every 16 voxels make a "Grass" (ID 2) checkerboard on top layer
-                let mut id = 1;
-                if z == depth - 1 && ((x / 16) + (y / 16)) % 2 == 0 {
-                    id = 2;
-                }
-                
-                // Still randomize the 'state' slightly to breaks uniform growth
-                let dummy_seed = (y * width + x) as u32;
-                let initial_state = (dummy_seed.wrapping_mul(1103515245) >> 24) as u8;
-                
-                grid_data.push(Voxel::new(id, initial_state, 20, 255));
-            }
-        }
+    let mut seed: u32 = 12345;
+    for _ in 0..data_size {
+        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+        let initial_state = (seed >> 16) as u8;
+        grid_data.push(Voxel::new(1, initial_state, 20, 255));
     }
 
     let grid_buffer = Buffer::from_iter(
@@ -187,14 +176,13 @@ fn main() {
         let rx = (a_seed % (width as u32)) as f32;
         let ry = ((a_seed.wrapping_mul(1103515245)) % (height as u32)) as f32;
         
-        // Random velocity between -0.05 and 0.05
         let vx = ((a_seed % 100) as f32 / 1000.0) - 0.05;
         let vy = (((a_seed >> 8) % 100) as f32 / 1000.0) - 0.05;
         
         initial_agents.push(Agent {
             pos: [rx, ry, (depth - 1) as f32],
             vel: [vx, vy, 0.0],
-            rotation: (a_seed % 360) as f32,
+            rotation: 0.0,
             vitals: 0,
             brain_id: i as u64,
             ..Default::default()
@@ -269,7 +257,6 @@ fn main() {
         
         sim_info_buffer.write().unwrap().u_time = tick as u32;
 
-        // Separate Descriptor Sets for each pipeline
         let set_growth = PersistentDescriptorSet::new(
             &descriptor_set_allocator,
             pipeline_growth.layout().set_layouts().get(0).unwrap().clone(),
@@ -297,16 +284,13 @@ fn main() {
             CommandBufferUsage::OneTimeSubmit,
         ).unwrap();
 
-        // Dispatch ONLY Agents (Disable Growth for Debugging Alignment)
         builder
-            /*
             .bind_pipeline_compute(pipeline_growth.clone())
             .unwrap()
             .bind_descriptor_sets(PipelineBindPoint::Compute, pipeline_growth.layout().clone(), 0, set_growth.clone())
             .unwrap()
             .dispatch([ (data_size as u32 / 256) + 1, 1, 1])
             .unwrap()
-            */
             .bind_pipeline_compute(pipeline_agents.clone())
             .unwrap()
             .bind_descriptor_sets(PipelineBindPoint::Compute, pipeline_agents.layout().clone(), 0, set_agents.clone())
@@ -316,7 +300,6 @@ fn main() {
 
         let command_buffer = builder.build().unwrap();
         
-        let compute_start = Instant::now();
         vulkano::sync::now(device.clone())
             .then_execute(queue.clone(), command_buffer)
             .unwrap()
@@ -324,7 +307,7 @@ fn main() {
             .unwrap()
             .wait(None)
             .unwrap();
-        let compute_ms = compute_start.elapsed().as_secs_f32() * 1000.0;
+        let compute_ms = loop_start.elapsed().as_secs_f32() * 1000.0;
 
         if tick % 60 == 0 && tick > 0 {
             let elapsed = last_tps_check.elapsed().as_secs_f32();
@@ -356,7 +339,6 @@ fn main() {
 
         let agent_content = agent_buffer.read().unwrap();
 
-        // Construct Packet: Header (48 bytes) + Voxel Data + Agent Data
         let mut packet = Vec::with_capacity(48 + (width * height * 4) + (agent_count * std::mem::size_of::<Agent>()));
         
         unsafe {
@@ -370,11 +352,10 @@ fn main() {
             packet.extend_from_slice(std::slice::from_raw_parts(agent_ptr, agent_count * std::mem::size_of::<Agent>()));
         }
 
-        let packet_len = packet.len();
         publisher.send(packet, 0).unwrap();
 
         if tick % 60 == 0 {
-            println!("[Tick {}] Life Engine Active. Packet: {} bytes | TPS: {:.1}", tick, packet_len, current_tps);
+            println!("[Tick {}] Life Engine Active. Packet: {} bytes | TPS: {:.1}", tick, packet.len(), current_tps);
         }
 
         tick += 1;
@@ -402,7 +383,6 @@ mod tests {
 
     #[test]
     fn test_vulkan_struct_layouts() {
-        // Verify SimInfo size for uniform alignment (must be multiple of 16 for some drivers, 32 is safe)
         assert_eq!(std::mem::size_of::<SimInfo>(), 16);
     }
 }
