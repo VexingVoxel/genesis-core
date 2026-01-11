@@ -352,10 +352,11 @@ fn main() {
             packet.extend_from_slice(std::slice::from_raw_parts(agent_ptr, agent_count * std::mem::size_of::<Agent>()));
         }
 
+        let packet_len = packet.len();
         publisher.send(packet, 0).unwrap();
 
         if tick % 60 == 0 {
-            println!("[Tick {}] Life Engine Active. Packet: {} bytes | TPS: {:.1}", tick, packet.len(), current_tps);
+            println!("[Tick {}] Life Engine Active. Packet: {} bytes | TPS: {:.1}", tick, packet_len, current_tps);
         }
 
         tick += 1;
