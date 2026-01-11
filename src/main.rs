@@ -372,4 +372,10 @@ mod tests {
     fn test_agent_size() {
         assert_eq!(std::mem::size_of::<Agent>(), 64);
     }
+
+    #[test]
+    fn test_vulkan_struct_layouts() {
+        // Verify SimInfo size for uniform alignment (must be multiple of 16 for some drivers, 32 is safe)
+        assert_eq!(std::mem::size_of::<SimInfo>(), 16);
+    }
 }

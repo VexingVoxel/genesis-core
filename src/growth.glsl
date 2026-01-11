@@ -2,12 +2,30 @@
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
+struct Agent {
+    float pos_x, pos_y, pos_z;
+    float vel_x, vel_y, vel_z;
+    float rotation;
+    uint vitals;
+    uint brain_id_lo;
+    uint brain_id_hi;
+    uint padding[6];
+};
+
 layout(set = 0, binding = 0, std430) buffer VoxelGrid {
     uint voxels[];
 } grid;
 
-layout(set = 0, binding = 1) uniform TimeInfo {
-    uint u_time; // This is the tick count, ~60 per second
+// Included for layout compatibility with agent shader
+layout(set = 0, binding = 1, std430) buffer AgentBuffer {
+    Agent agents[];
+} agents;
+
+layout(set = 0, binding = 2) uniform SimInfo {
+    uint u_time;
+    uint world_width;
+    uint world_height;
+    uint world_depth;
 };
 
 void main() {
@@ -18,9 +36,9 @@ void main() {
     uint id = v & 0xFF;
     uint state = (v >> 8) & 0xFF;
     
-    // Logic: If Dirt (1), and if the tick is a multiple of 60 (i.e., once per second)
+    // Logic: If Dirt (1), and if the tick is a multiple of 60
     if (id == 1 && u_time > 0 && u_time % 60 == 0) {
-        state += 10; // Increase state by a noticeable amount each second
+        state += 10;
         
         if (state >= 255) {
             id = 2; // Transition to Grass (ID 2)
