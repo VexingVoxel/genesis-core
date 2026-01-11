@@ -271,6 +271,7 @@ fn main() {
                     if agent.brain_id == brain_id {
                         agent.vel[0] = target_angle.cos() * speed;
                         agent.vel[1] = target_angle.sin() * speed;
+                        println!("[Command] Agent {} moving at {:.2} rad", brain_id, target_angle);
                         break;
                     }
                 }
