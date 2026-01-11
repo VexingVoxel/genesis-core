@@ -35,7 +35,8 @@ struct TelemetryHeader {
     padding_c: u8,       // Padding
     padding_d: u8,       // Padding
     padding_e: u8,       // Padding
-    padding_f: u32,      // Pad to 48 bytes to maintain 8-byte alignment for payload
+    padding_f: u32,      // Padding
+    padding_g: u16,      // Pad to 48 bytes to maintain 8-byte alignment for payload
 }
 
 // --- Agent Schema (64-byte Aligned) ---
