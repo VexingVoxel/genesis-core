@@ -329,7 +329,8 @@ fn main() {
 
         let agent_content = agent_buffer.read().unwrap();
 
-        let mut packet = Vec::with_capacity(48 + (width * height * 4) + (agent_count * 64));
+        // Construct Packet: Header (48 bytes) + Voxel Data + Agent Data
+        let mut packet = Vec::with_capacity(48 + (width * height * 4) + (agent_count * std::mem::size_of::<Agent>()));
         
         unsafe {
             let header_ptr = &header as *const TelemetryHeader as *const u8;
@@ -339,13 +340,14 @@ fn main() {
             packet.extend_from_slice(std::slice::from_raw_parts(voxel_ptr, width * height * 4));
             
             let agent_ptr = agent_content.as_ptr() as *const u8;
-            packet.extend_from_slice(std::slice::from_raw_parts(agent_ptr, agent_count * 64));
+            packet.extend_from_slice(std::slice::from_raw_parts(agent_ptr, agent_count * std::mem::size_of::<Agent>()));
         }
 
+        let packet_len = packet.len();
         publisher.send(packet, 0).unwrap();
 
         if tick % 60 == 0 {
-            println!("[Tick {}] Life Engine Active. Agents: {} | TPS: {:.1}", tick, agent_count, current_tps);
+            println!("[Tick {}] Life Engine Active. Packet: {} bytes | TPS: {:.1}", tick, packet_len, current_tps);
         }
 
         tick += 1;
