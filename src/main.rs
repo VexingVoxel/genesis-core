@@ -172,9 +172,9 @@ fn main() {
     let mut initial_agents = Vec::with_capacity(agent_count);
     for i in 0..agent_count {
         seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-        let rx = ((seed % width) as f32);
+        let rx = (seed % (width as u32)) as f32;
         seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-        let ry = ((seed % height) as f32);
+        let ry = (seed % (height as u32)) as f32;
         
         initial_agents.push(Agent {
             pos: [rx, ry, (depth - 1) as f32],
@@ -211,9 +211,9 @@ fn main() {
         },
         SimInfo { 
             u_time: 0,
-            world_width: width,
-            world_height: height,
-            world_depth: depth,
+            world_width: width as u32,
+            world_height: height as u32,
+            world_depth: depth as u32,
         }
     ).expect("failed to create sim info buffer");
 
