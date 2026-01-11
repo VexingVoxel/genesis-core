@@ -319,6 +319,7 @@ fn main() {
             agent_count: agent_count as u16,
             padding_b: 0, padding_c: 0, padding_d: 0, padding_e: 0,
             padding_f: 0,
+            padding_g: 0,
         };
 
         let voxel_content = grid_buffer.read().unwrap();
