@@ -255,7 +255,19 @@ fn main() {
         
         sim_info_buffer.write().unwrap().u_time = tick as u32;
 
-        let set = PersistentDescriptorSet::new(
+        // Separate Descriptor Sets for each pipeline
+        let set_growth = PersistentDescriptorSet::new(
+            &descriptor_set_allocator,
+            pipeline_growth.layout().set_layouts().get(0).unwrap().clone(),
+            [
+                WriteDescriptorSet::buffer(0, grid_buffer.clone()),
+                WriteDescriptorSet::buffer(1, agent_buffer.clone()),
+                WriteDescriptorSet::buffer(2, sim_info_buffer.clone()),
+            ],
+            [],
+        ).unwrap();
+
+        let set_agents = PersistentDescriptorSet::new(
             &descriptor_set_allocator,
             pipeline_agents.layout().set_layouts().get(0).unwrap().clone(),
             [
@@ -272,17 +284,17 @@ fn main() {
             CommandBufferUsage::OneTimeSubmit,
         ).unwrap();
 
-        // Dispatch Growth & Agents
+        // Dispatch Growth & Agents with their specific sets
         builder
             .bind_pipeline_compute(pipeline_growth.clone())
             .unwrap()
-            .bind_descriptor_sets(PipelineBindPoint::Compute, pipeline_growth.layout().clone(), 0, set.clone())
+            .bind_descriptor_sets(PipelineBindPoint::Compute, pipeline_growth.layout().clone(), 0, set_growth.clone())
             .unwrap()
             .dispatch([ (data_size as u32 / 256) + 1, 1, 1])
             .unwrap()
             .bind_pipeline_compute(pipeline_agents.clone())
             .unwrap()
-            .bind_descriptor_sets(PipelineBindPoint::Compute, pipeline_agents.layout().clone(), 0, set.clone())
+            .bind_descriptor_sets(PipelineBindPoint::Compute, pipeline_agents.layout().clone(), 0, set_agents.clone())
             .unwrap()
             .dispatch([ (agent_count as u32 / 64) + 1, 1, 1])
             .unwrap();
