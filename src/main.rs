@@ -145,7 +145,7 @@ fn main() {
     let height = 128;
     let depth = 32;
     let data_size = width * height * depth;
-    let agent_count = 5;
+    let agent_count = 100;
     
     // Fill with Dirt (ID 1) with randomized initial state for organic growth
     let mut grid_data = Vec::with_capacity(data_size);
@@ -284,6 +284,7 @@ fn main() {
             CommandBufferUsage::OneTimeSubmit,
         ).unwrap();
 
+        // Dispatch Growth & Agents
         builder
             .bind_pipeline_compute(pipeline_growth.clone())
             .unwrap()
@@ -339,6 +340,7 @@ fn main() {
 
         let agent_content = agent_buffer.read().unwrap();
 
+        // Construct Packet: Header (48 bytes) + Voxel Data + Agent Data
         let mut packet = Vec::with_capacity(48 + (width * height * 4) + (agent_count * std::mem::size_of::<Agent>()));
         
         unsafe {
