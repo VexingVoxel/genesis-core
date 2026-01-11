@@ -145,7 +145,7 @@ fn main() {
     let height = 128;
     let depth = 32;
     let data_size = width * height * depth;
-    let agent_count = 100;
+    let agent_count = 5;
     
     // Fill with Dirt (ID 1) with randomized initial state for organic growth
     let mut grid_data = Vec::with_capacity(data_size);
