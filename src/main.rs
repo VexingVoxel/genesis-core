@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use serde::{Serialize};
 use chrono::Utc;
 
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
@@ -17,6 +17,19 @@ use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::sync::GpuFuture;
 use vulkano::VulkanLibrary;
+
+// --- Binary Protocol Specification (Phase 2.5) ---
+#[repr(C, packed)]
+struct TelemetryHeader {
+    magic: u32,          // 0xDEADBEEF
+    padding: u32,        // 8-byte alignment
+    tick: u64,           // Current simulation step
+    timestamp: i64,      // Microseconds since epoch
+    compute_ms: f32,     // GPU dispatch time
+    tps: f32,            // Ticks Per Second
+    width: u16,          // 128
+    height: u16,         // 128
+}
 
 // --- Voxel Schema ---
 #[derive(Copy, Clone, Serialize, Debug, Default, vulkano::buffer::BufferContents)]
@@ -33,16 +46,7 @@ impl Voxel {
     }
 }
 
-#[derive(Serialize)]
-struct Heartbeat {
-    tick: u64,
-    node_name: String,
-    status: String,
-    timestamp: i64,
-    voxel_slice: Vec<u32>, // The 32x32 visualization slice
-}
-
-// NEW: Add a struct for our uniform data
+// Struct for uniform data
 #[derive(Copy, Clone, vulkano::buffer::BufferContents)]
 #[repr(C)]
 struct TimeInfo {
@@ -57,11 +61,16 @@ mod cs {
 }
 
 fn main() {
-    println!("--- Genesis Core: Phase 2 Engine Starting ---");
+    println!("--- Genesis Core: Phase 2.5 HIFI Engine Starting ---");
 
     // 0. Initialize ZMQ
     let zmq_context = zmq::Context::new();
     let publisher = zmq_context.socket(zmq::PUB).unwrap();
+    
+    // Applying ZMQ_CONFLATE and SNDHWM for lag mitigation
+    publisher.set_conflate(true).expect("Failed to set ZMQ_CONFLATE");
+    publisher.set_sndhwm(1).expect("Failed to set ZMQ_SNDHWM");
+    
     publisher.bind("tcp://0.0.0.0:5555").expect("Could not bind ZMQ publisher");
 
     // 1. Initialize Vulkan
@@ -127,7 +136,6 @@ fn main() {
         grid_data,
     ).expect("failed to create buffer");
 
-    // NEW: Create buffer for time uniform
     let time_buffer = Buffer::from_data(
         memory_allocator.clone(),
         BufferCreateInfo {
@@ -140,7 +148,6 @@ fn main() {
         },
         TimeInfo { u_time: 0 }
     ).expect("failed to create time buffer");
-
 
     let shader = cs::load(device.clone()).expect("failed to create shader module");
     let entry_point = shader.entry_point("main").expect("main entry point not found");
@@ -164,8 +171,14 @@ fn main() {
     
     println!("Simulation Loop Active...");
     let mut tick: u64 = 0;
+    let mut last_tps_check = Instant::now();
+    let mut last_tick_for_tps = 0;
+    let mut current_tps = 0.0;
+
     loop {
-        // NEW: Update the time buffer and create a new descriptor set for this frame
+        let loop_start = Instant::now();
+        
+        // Update time uniform
         time_buffer.write().unwrap().u_time = tick as u32;
 
         let set = PersistentDescriptorSet::new(
@@ -194,6 +207,8 @@ fn main() {
 
         let command_buffer = builder.build().unwrap();
         
+        // --- Profile Compute Dispatch ---
+        let compute_start = Instant::now();
         vulkano::sync::now(device.clone())
             .then_execute(queue.clone(), command_buffer)
             .unwrap()
@@ -201,37 +216,99 @@ fn main() {
             .unwrap()
             .wait(None)
             .unwrap();
+        let compute_ms = compute_start.elapsed().as_secs_f32() * 1000.0;
 
-        // --- Read Voxel Slice for Visualization ---
-        let mut voxel_slice = Vec::with_capacity(1024); // 32x32
-        
-        if tick % 10 == 0 {
-            let content = grid_buffer.read().unwrap();
-            for y in 48..80 {
-                for x in 48..80 {
-                    let idx = (31 * width * height) + (y * width) + x;
-                    voxel_slice.push(content[idx].packed);
-                }
-            }
+        // --- TPS Calculation (Every 60 ticks) ---
+        if tick % 60 == 0 && tick > 0 {
+            let elapsed = last_tps_check.elapsed().as_secs_f32();
+            current_tps = (tick - last_tick_for_tps) as f32 / elapsed;
+            last_tps_check = Instant::now();
+            last_tick_for_tps = tick;
         }
 
-        // Send Heartbeat
-        let heartbeat = Heartbeat {
+        // --- Prepare Binary Packet ---
+        let header = TelemetryHeader {
+            magic: 0xDEADBEEF,
+            padding: 0,
             tick,
-            node_name: "genesis-compute".to_string(),
-            status: "SIMULATING".to_string(),
-            timestamp: Utc::now().timestamp(),
-            voxel_slice,
+            timestamp: Utc::now().timestamp_micros(),
+            compute_ms,
+            tps: current_tps,
+            width: width as u16,
+            height: height as u16,
         };
+
+        // Read top slice (layer 31) for HIFI visualization
+        let content = grid_buffer.read().unwrap();
+        let slice_start = (depth - 1) * width * height;
+        let slice_end = slice_start + (width * height);
+        let voxel_data = &content[slice_start..slice_end];
+
+        // Construct Packet: Header (32 bytes) + Voxel Data (65536 bytes)
+        let mut packet = Vec::with_capacity(32 + (width * height * 4));
         
-        let json = serde_json::to_string(&heartbeat).unwrap();
-        publisher.send(&json, 0).unwrap();
+        // Unsafe cast header to bytes
+        unsafe {
+            let header_ptr = &header as *const TelemetryHeader as *const u8;
+            let header_bytes = std::slice::from_raw_parts(header_ptr, std::mem::size_of::<TelemetryHeader>());
+            packet.extend_from_slice(header_bytes);
+            
+            let voxel_ptr = voxel_data.as_ptr() as *const u8;
+            let voxel_bytes = std::slice::from_raw_parts(voxel_ptr, width * height * 4);
+            packet.extend_from_slice(voxel_bytes);
+        }
+
+        publisher.send(packet, 0).unwrap();
 
         if tick % 60 == 0 {
-            println!("[Tick {}] Heartbeat + Voxel Data sent.", tick);
+            println!("[Tick {}] Binary Packet Sent. TPS: {:.2} | Compute: {:.2}ms", tick, current_tps, compute_ms);
         }
 
         tick += 1;
-        thread::sleep(Duration::from_millis(16));
+        
+        // Target 60Hz
+        let elapsed = loop_start.elapsed();
+        let target = Duration::from_millis(16);
+        if elapsed < target {
+            thread::sleep(target - elapsed);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_header_size() {
+        assert_eq!(std::mem::size_of::<TelemetryHeader>(), 32);
+    }
+
+    #[test]
+    fn test_voxel_packing() {
+        let v = Voxel::new(1, 2, 3, 4);
+        // ID (1) | State (2 << 8) | Thermal (3 << 16) | Light (4 << 24)
+        // 1 | 512 | 196608 | 67108864 = 67305985
+        assert_eq!(v.packed, 67305985);
+    }
+
+    #[test]
+    fn test_magic_byte_order() {
+        let header = TelemetryHeader {
+            magic: 0xDEADBEEF,
+            padding: 0,
+            tick: 0,
+            timestamp: 0,
+            compute_ms: 0.0,
+            tps: 0.0,
+            width: 0,
+            height: 0,
+        };
+        unsafe {
+            let ptr = &header as *const TelemetryHeader as *const u8;
+            let bytes = std::slice::from_raw_parts(ptr, 4);
+            // Little Endian: EF BE AD DE
+            assert_eq!(bytes, &[0xEF, 0xBE, 0xAD, 0xDE]);
+        }
     }
 }
