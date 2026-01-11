@@ -145,7 +145,7 @@ fn main() {
     let height = 128;
     let depth = 32;
     let data_size = width * height * depth;
-    let agent_count = 100;
+    let agent_count = 5;
     
     // Fill with Dirt (ID 1) + Debug Checkerboard for mapping validation
     let mut grid_data = Vec::with_capacity(data_size);
@@ -297,14 +297,16 @@ fn main() {
             CommandBufferUsage::OneTimeSubmit,
         ).unwrap();
 
-        // Dispatch Growth & Agents with their specific sets
+        // Dispatch ONLY Agents (Disable Growth for Debugging Alignment)
         builder
+            /*
             .bind_pipeline_compute(pipeline_growth.clone())
             .unwrap()
             .bind_descriptor_sets(PipelineBindPoint::Compute, pipeline_growth.layout().clone(), 0, set_growth.clone())
             .unwrap()
             .dispatch([ (data_size as u32 / 256) + 1, 1, 1])
             .unwrap()
+            */
             .bind_pipeline_compute(pipeline_agents.clone())
             .unwrap()
             .bind_descriptor_sets(PipelineBindPoint::Compute, pipeline_agents.layout().clone(), 0, set_agents.clone())
