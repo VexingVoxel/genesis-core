@@ -100,6 +100,9 @@ fn main() {
     publisher.set_sndhwm(1).expect("Failed to set ZMQ_SNDHWM");
     publisher.bind("tcp://0.0.0.0:5555").expect("Could not bind ZMQ publisher");
 
+    let command_receiver = zmq_context.socket(zmq::PULL).unwrap();
+    command_receiver.bind("tcp://0.0.0.0:5556").expect("Could not bind ZMQ command receiver");
+
     // 1. Initialize Vulkan
     let library = VulkanLibrary::new().expect("no local Vulkan library/driver found");
     let instance = Instance::new(library, InstanceCreateInfo {
@@ -255,6 +258,25 @@ fn main() {
     loop {
         let loop_start = Instant::now();
         
+        // --- Process Commands (Intents) ---
+        while let Ok(cmd_bytes) = command_receiver.recv_bytes(zmq::DONTWAIT) {
+            if cmd_bytes.len() == 16 {
+                let brain_id = u64::from_le_bytes(cmd_bytes[0..8].try_into().unwrap());
+                let target_angle = f32::from_le_bytes(cmd_bytes[8..12].try_into().unwrap());
+                let speed = f32::from_le_bytes(cmd_bytes[12..16].try_into().unwrap());
+                
+                // Update specific agent velocity
+                let mut content = agent_buffer.write().unwrap();
+                for agent in content.iter_mut() {
+                    if agent.brain_id == brain_id {
+                        agent.vel[0] = target_angle.cos() * speed;
+                        agent.vel[1] = target_angle.sin() * speed;
+                        break;
+                    }
+                }
+            }
+        }
+
         sim_info_buffer.write().unwrap().u_time = tick as u32;
 
         let set_growth = PersistentDescriptorSet::new(
