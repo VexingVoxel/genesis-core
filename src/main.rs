@@ -122,8 +122,15 @@ fn main() {
     let depth = 32;
     let data_size = width * height * depth;
     
-    // Fill with Dirt (ID 1)
-    let mut grid_data = vec![Voxel::new(1, 0, 20, 255); data_size]; 
+    // Fill with Dirt (ID 1) with randomized initial state for organic growth
+    let mut grid_data = Vec::with_capacity(data_size);
+    let mut seed: u32 = 12345;
+    for i in 0..data_size {
+        // Simple LCG for initial state randomization
+        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+        let initial_state = (seed >> 16) as u8;
+        grid_data.push(Voxel::new(1, initial_state, 20, 255));
+    }
     
     // Add Test Pattern: One Grass voxel at (64, 64) in the top layer
     let test_idx = ((depth - 1) * width * height) + (64 * width) + 64;
