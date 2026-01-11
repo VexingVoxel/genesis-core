@@ -2,24 +2,9 @@
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
-struct Agent {
-    float pos_x, pos_y, pos_z;
-    float vel_x, vel_y, vel_z;
-    float rotation;
-    uint vitals;
-    uint brain_id_lo;
-    uint brain_id_hi;
-    uint padding[6];
-};
-
 layout(set = 0, binding = 0, std430) buffer VoxelGrid {
     uint voxels[];
 } grid;
-
-// Included for layout compatibility with agent shader
-layout(set = 0, binding = 1, std430) buffer AgentBuffer {
-    Agent agents[];
-} agents;
 
 layout(set = 0, binding = 2) uniform SimInfo {
     uint u_time;

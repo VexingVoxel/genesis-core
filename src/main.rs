@@ -261,7 +261,6 @@ fn main() {
             pipeline_growth.layout().set_layouts().get(0).unwrap().clone(),
             [
                 WriteDescriptorSet::buffer(0, grid_buffer.clone()),
-                WriteDescriptorSet::buffer(1, agent_buffer.clone()),
                 WriteDescriptorSet::buffer(2, sim_info_buffer.clone()),
             ],
             [],
