@@ -19,16 +19,18 @@ use vulkano::sync::GpuFuture;
 use vulkano::VulkanLibrary;
 
 // --- Binary Protocol Specification (Phase 2.5) ---
+// Total Size: 40 bytes (8-byte aligned)
 #[repr(C, packed)]
 struct TelemetryHeader {
     magic: u32,          // 0xDEADBEEF
-    padding: u32,        // 8-byte alignment
+    padding_a: u32,      // 8-byte alignment
     tick: u64,           // Current simulation step
     timestamp: i64,      // Microseconds since epoch
     compute_ms: f32,     // GPU dispatch time
     tps: f32,            // Ticks Per Second
     width: u16,          // 128
     height: u16,         // 128
+    padding_b: u32,      // Pad to 40 bytes to maintain 8-byte alignment for payload
 }
 
 // --- Voxel Schema ---
@@ -229,13 +231,14 @@ fn main() {
         // --- Prepare Binary Packet ---
         let header = TelemetryHeader {
             magic: 0xDEADBEEF,
-            padding: 0,
+            padding_a: 0,
             tick,
             timestamp: Utc::now().timestamp_micros(),
             compute_ms,
             tps: current_tps,
             width: width as u16,
             height: height as u16,
+            padding_b: 0,
         };
 
         // Read top slice (layer 31) for HIFI visualization
@@ -244,8 +247,8 @@ fn main() {
         let slice_end = slice_start + (width * height);
         let voxel_data = &content[slice_start..slice_end];
 
-        // Construct Packet: Header (32 bytes) + Voxel Data (65536 bytes)
-        let mut packet = Vec::with_capacity(32 + (width * height * 4));
+        // Construct Packet: Header (40 bytes) + Voxel Data (65536 bytes)
+        let mut packet = Vec::with_capacity(40 + (width * height * 4));
         
         // Unsafe cast header to bytes
         unsafe {
@@ -281,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_header_size() {
-        assert_eq!(std::mem::size_of::<TelemetryHeader>(), 32);
+        assert_eq!(std::mem::size_of::<TelemetryHeader>(), 40);
     }
 
     #[test]
@@ -296,13 +299,14 @@ mod tests {
     fn test_magic_byte_order() {
         let header = TelemetryHeader {
             magic: 0xDEADBEEF,
-            padding: 0,
+            padding_a: 0,
             tick: 0,
             timestamp: 0,
             compute_ms: 0.0,
             tps: 0.0,
             width: 0,
             height: 0,
+            padding_b: 0,
         };
         unsafe {
             let ptr = &header as *const TelemetryHeader as *const u8;
