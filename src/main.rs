@@ -147,13 +147,24 @@ fn main() {
     let data_size = width * height * depth;
     let agent_count = 100;
     
-    // Fill with Dirt (ID 1) with randomized initial state
+    // Fill with Dirt (ID 1) + Debug Checkerboard for mapping validation
     let mut grid_data = Vec::with_capacity(data_size);
-    let mut seed: u32 = 12345;
-    for _ in 0..data_size {
-        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-        let initial_state = (seed >> 16) as u8;
-        grid_data.push(Voxel::new(1, initial_state, 20, 255));
+    for z in 0..depth {
+        for y in 0..height {
+            for x in 0..width {
+                // ID 1 (Dirt), but every 16 voxels make a "Grass" (ID 2) checkerboard on top layer
+                let mut id = 1;
+                if z == depth - 1 && ((x / 16) + (y / 16)) % 2 == 0 {
+                    id = 2;
+                }
+                
+                // Still randomize the 'state' slightly to breaks uniform growth
+                let dummy_seed = (y * width + x) as u32;
+                let initial_state = (dummy_seed.wrapping_mul(1103515245) >> 24) as u8;
+                
+                grid_data.push(Voxel::new(id, initial_state, 20, 255));
+            }
+        }
     }
 
     let grid_buffer = Buffer::from_iter(
@@ -169,18 +180,21 @@ fn main() {
         grid_data,
     ).expect("failed to create voxel buffer");
 
-    // Initialize Agents
+    // Initialize Agents with UNIQUE seeds to break lockstep
     let mut initial_agents = Vec::with_capacity(agent_count);
     for i in 0..agent_count {
-        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-        let rx = (seed % (width as u32)) as f32;
-        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-        let ry = (seed % (height as u32)) as f32;
+        let a_seed = (i as u32).wrapping_mul(1103515245).wrapping_add(12345);
+        let rx = (a_seed % (width as u32)) as f32;
+        let ry = ((a_seed.wrapping_mul(1103515245)) % (height as u32)) as f32;
+        
+        // Random velocity between -0.05 and 0.05
+        let vx = ((a_seed % 100) as f32 / 1000.0) - 0.05;
+        let vy = (((a_seed >> 8) % 100) as f32 / 1000.0) - 0.05;
         
         initial_agents.push(Agent {
             pos: [rx, ry, (depth - 1) as f32],
-            vel: [0.05, 0.02, 0.0], // Slow initial drift
-            rotation: 0.0,
+            vel: [vx, vy, 0.0],
+            rotation: (a_seed % 360) as f32,
             vitals: 0,
             brain_id: i as u64,
             ..Default::default()
